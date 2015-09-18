@@ -7,10 +7,12 @@ var bodyParser = require('body-parser');
 var onResponse = require('on-response');
 var childProcess = require('child-process-promise');
 var fs = require('fs');
+var localtunnel = require('localtunnel');
 
-function Scant(logger, scanline_path, scanner) {
+function Scant(logger, respondWithFile, scanline_path, scanner) {
 
     this._logger = logger;
+    this._respondWithFile = respondWithFile;
     this._scanner = scanner;
     this._scanline_path = scanline_path;
 
@@ -20,10 +22,30 @@ function Scant(logger, scanline_path, scanner) {
     this._logger.info({scanline: scanline_path, scanner: scanner}, 'Initialized');
 }
 
-Scant.prototype.listen = function(port) {
+Scant.prototype.listen = function(domain, port) {
+
+    this._initializeLocalTunnel(domain, port);
 
     this._logger.info({port: port}, 'Listening')
     this.app.listen(port);
+};
+
+Scant.prototype._initializeLocalTunnel = function(domain, port) {
+
+    var self = this;
+
+    self._tunnel = localtunnel(port, {subdomain: domain}, function(err, tunnel) {
+
+        if (err)
+            return self._logger.warn({domain: domain, err: err}, 'Failed to create local tunnel');
+
+        self._logger.info({domain: self._tunnel.url}, 'Local tunnel created');
+
+        self._tunnel.on('close', function() {
+
+            self._logger.warn('Local tunnel closed');
+        });
+    });
 };
 
 Scant.prototype._initializeExpress = function() {
@@ -36,7 +58,9 @@ Scant.prototype._initializeExpress = function() {
     self.app.use(bodyParser.json({limit: '10mb'}));
 
     // parse url encoded params
-    self.app.use(bodyParser.urlencoded());
+    self.app.use(bodyParser.urlencoded({
+        extended: true
+    }));
 
     // log all requests and their responses
     self.app.use(function(request, response, next) {
@@ -55,7 +79,7 @@ Scant.prototype._initializeExpress = function() {
     });
 };
 
-Scant.prototype._scan = function(request, response) {
+Scant.prototype._scanWithScanline = function(request, response) {
 
     var self = this;
 
@@ -71,6 +95,7 @@ Scant.prototype._scan = function(request, response) {
             self._logger.debug({result: result.stderr, location: scanPath}, 'Extracted scan location from result');
 
             // send the file pack
+            response.setHeader('Content-type', 'application/pdf');
             response.sendFile(scanPath, function(error) {
 
                 if (error) {
@@ -99,7 +124,34 @@ Scant.prototype._scan = function(request, response) {
         self._logger.error({error: error}, 'Failed to run command');
         response.sendStatus(500);
     });
-}
+};
+
+Scant.prototype._scanSimulation = function(fileResponse, request, response) {
+
+    var self = this;
+
+    self._logger.info(fileResponse, 'Responding with local file');
+
+    response.sendFile(fileResponse.path, {root: './'}, function(error) {
+
+        if (error) {
+            self._logger.warn({error: error}, 'Failed to send file');
+            response.status(error.status).end();
+        }
+    });
+};
+
+
+Scant.prototype._scan = function(request, response) {
+
+    var self = this;
+
+    if (self._respondWithFile) {
+        self._scanSimulation(self._respondWithFile, request, response);
+    } else {
+        self._scanWithScanline(request, response);
+    }
+};
 
 Scant.prototype._initRoutes = function() {
 
@@ -109,6 +161,12 @@ Scant.prototype._initRoutes = function() {
     self.app.route('/scans').post(function(request, response) {
 
         self._scan(request, response);
+    });
+
+    // sanity
+    self.app.route('/status').get(function(request, response) {
+
+        response.json({status: 'All\'s good, homes'});
     });
 
     // route everything that hasn't been caught

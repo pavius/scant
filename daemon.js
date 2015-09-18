@@ -16,7 +16,7 @@ function initializeLogger(daemon) {
 
     daemon.logger = bunyan.createLogger({
         name: 'scant',
-        level: process.env.SCANT_LOG_LEVEL || 'debug',
+        level: config.scant.logLevel,
         serializers: {request: serializeRequest, response: serializeResponse}});
 }
 
@@ -27,7 +27,10 @@ function initialize(daemon) {
     daemon.logger.info('Initializing daemon');
 
     // create service instance
-    daemon.service = new Scant(daemon.logger, config.scanline.path, config.scanline.scanner);
+    daemon.service = new Scant(daemon.logger,
+        config.scant.respondWithFile,
+        config.scanline.path,
+        config.scanline.scanner);
 }
 
 var daemon = {}
@@ -36,4 +39,4 @@ var daemon = {}
 initialize(daemon);
 
 // start listening
-daemon.service.listen(parseInt(process.env.SCANT_LISTEN_PORT) || config.express.port);
+daemon.service.listen(config.scant.domain, config.scant.port);
